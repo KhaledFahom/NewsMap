@@ -1,0 +1,25 @@
+<ripple xmlns:android="http://schemas.android.com/apk/res/android" 
+        android:color="@color/darkred">
+        <item android:id="@android:id/mask">
+            <shape android:shape="oval">
+                <solid android:color="@color/darkred" />
+            </shape>
+        </item>
+        <item>
+            <layer-list>
+                <item>
+                <shape android:shape="oval">
+                	<solid 
+                	    android:color="@color/orange" />  
+                	<stroke 
+                	    android:width="2dp" 
+                	    android:color="@color/darkorange"/>
+           		</shape>
+                </item>
+                <item 
+                    android:drawable="@drawable/ic_camera_white_48dp" 
+                    />
+            </layer-list>
+            
+        </item>
+ </ripple>

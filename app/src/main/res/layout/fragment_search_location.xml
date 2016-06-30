@@ -1,0 +1,47 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/fragment_input"
+    tools:context=".SearchLocationFragment"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:layout_gravity="center"
+    android:orientation="vertical"
+    android:gravity="center_vertical" 
+    android:background="@drawable/search_background_gradient">
+
+    <LinearLayout
+        android:orientation="horizontal"
+        android:paddingRight="6dp"
+        android:paddingLeft="6dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:layout_width="fill_parent"
+        android:layout_height="0dp"
+        android:layout_weight="0.1">
+        <ListView
+            android:id="@+id/search_list"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:divider="@color/common_action_bar_splitter"
+            android:dividerHeight="4px">
+        </ListView>
+    </LinearLayout>
+    <LinearLayout
+        android:orientation="vertical"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content">
+        <LinearLayout
+            android:orientation="vertical"
+            android:layout_width="fill_parent"
+            android:layout_height="wrap_content"
+            android:paddingRight="6dp"
+            android:paddingLeft="6dp">
+            <EditText
+                android:id="@+id/search_input"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="text"
+                android:imeOptions="actionDone" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>
