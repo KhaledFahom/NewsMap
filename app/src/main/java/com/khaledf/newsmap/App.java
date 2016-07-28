@@ -4,5 +4,5 @@ import android.app.Application;
 
 public class App extends Application {
 
-    // shared variables live here
+    public static final String USER_AGENT = "android:com.khaledf.newsmap:1.2";
 }

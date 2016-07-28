@@ -7,6 +7,7 @@ import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Hashtable;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
@@ -33,6 +34,7 @@ import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
 import android.support.v4.app.FragmentActivity;
 import android.util.Log;
 import android.view.Gravity;
@@ -59,6 +61,21 @@ import com.google.android.gms.maps.model.PolylineOptions;
 public class MapsActivity extends FragmentActivity
         implements OnMapReadyCallback {
 
+    /* Required for delayed runnables */
+    private int safeConnectURLIndex;
+    private boolean safeConnectChainedCallFlag;
+
+    /*  We have to wait 2000ms between subsequent connections
+    *   to Reddit, otherwise the app gets severely rate-limited. */
+    private int DEFAULT_POLYLINE_WIDTH = 10, MINIMUM_TIME_BETWEEN_REDDIT_REQUESTS = 2000;
+
+    /*  Required to keep track of the currently pressed polyline.
+    *   Default Zindex is 0, and higher values trump lower ones. */
+    private float maxZIndex = 1;
+    private Polyline pressedPolyline = null;
+
+    /*  Required to retry connecting to the current URL
+        in case of connectivity loss. */
     private String lastUsedURL = "";
 
     /* Adapter for marker popups. */
@@ -96,13 +113,15 @@ public class MapsActivity extends FragmentActivity
     private ConnectAndDisplayTask activeConnectionTask = null;
 
     /* 2 lists of events:
-    *  - 'events' is used to store event objects retreived
+    *  - 'events' is used to store event objects retrieved
     * 	  in background thread.
     *  - 'displayEvents' is used as a queue for displaying events on the
     *    UI thread while the background thread still hasn't finished
-    *    retreiving all the coordinates. BackgroundThread adds to the end,
-    *    and UI thread removes from the front. */
-    private ArrayList<EventObject> events = null, displayEvents = null;
+    *    retrieving all the coordinates. BackgroundThread adds to the end,
+    *    and UI thread removes from the front. Therefore we'll use LinkedList
+     *    which has O(1) for add, peek and poll. */
+    private ArrayList<EventObject> events = null;
+    private LinkedList<EventObject> displayEvents = null;
 
     /* Map object, used to synchronize with Google Maps API connection. */
     private GoogleMap map = null;
@@ -128,7 +147,7 @@ public class MapsActivity extends FragmentActivity
     /* An object that represents one recent news event. It could have
     * multiple locations involved, and thus multiple coordinates. */
     public class EventObject {
-        public double[] latitudes, longitudes;
+        public LatLng[] coordinates;
         public ArrayList<String> locations = null;
         public String URL = "";
         public String headline = "";
@@ -136,8 +155,7 @@ public class MapsActivity extends FragmentActivity
         public EventObject(String headline, String URL) {
             this.headline = headline;
             this.URL = URL;
-            latitudes = new double[maxCoordinates];
-            longitudes = new double[maxCoordinates];
+            coordinates = new LatLng[maxCoordinates];
             this.locations = null;
         }
     }
@@ -176,10 +194,10 @@ public class MapsActivity extends FragmentActivity
         @Override
         public View getInfoContents(Marker marker) {
             View popup = inflater.inflate(R.layout.popup, null);
-            TextView tv = (TextView)popup.findViewById(R.id.title);
-            tv.setText(marker.getTitle());
-            tv = (TextView)popup.findViewById(R.id.url);
-            tv.setText(marker.getSnippet());
+            TextView titleTextView = (TextView)popup.findViewById(R.id.title);
+            titleTextView.setText(marker.getTitle());
+            titleTextView = (TextView)popup.findViewById(R.id.url);
+            titleTextView.setText(marker.getSnippet());
             return(popup);
         }
     }
@@ -216,26 +234,27 @@ public class MapsActivity extends FragmentActivity
                 mainURL = connectionURLs.get(URLIndex);
             }
             lastUsedURL = mainURL;
-            Log.d("URL1", "MAINURL IS "+mainURL);
-            if(markers != null) {
-                Log.d("URL","marker size is "+markers.size());
-            }
+   //         Log.d("URL1", "MAINURL IS "+mainURL);
+   //         if(markers != null) {
+   //             Log.d("URL","marker size is "+markers.size());
+   //         }
         }
 
         @Override
         protected String doInBackground(String... params) {
             String nextPageURL = null;
             events = new ArrayList<EventObject>();
-            displayEvents = new ArrayList<EventObject>();
+            displayEvents = new LinkedList<EventObject>();
             String URL = "", headline = "";
             int pendingGetRequests = (int) Math.ceil(maxCoordinates/redditDisplayChunkLimit);
             try {
         /* Connecting and filling 'rawElements' with HTML elements. */
-                doc =  Jsoup.connect(mainURL).
-                        maxBodySize(bodySizeBytes).timeout(timeoutMS).get();
+                doc =  Jsoup.connect(mainURL).userAgent(App.USER_AGENT)
+                        .maxBodySize(bodySizeBytes).timeout(timeoutMS).get();
                 Elements rawElements = doc.select("div[data-type$=link]");
                 nextPageURL = getNextPageURL(doc.select("a:contains(next)"));
                 while(pendingGetRequests > 0) {
+                    Thread.sleep(MINIMUM_TIME_BETWEEN_REDDIT_REQUESTS);
                     doc = Jsoup.connect(nextPageURL).maxBodySize(bodySizeBytes)
                             .timeout(timeoutMS).get();
                     rawElements.addAll(doc.select("div[data-type$=link]"));
@@ -243,7 +262,7 @@ public class MapsActivity extends FragmentActivity
                     pendingGetRequests--;
                 }
                 nextConnectionURLs.add(nextPageURL);
-                Log.d("URL", "nextpg url is: "+nextPageURL);
+    //          Log.d("URL", "nextpg url is: "+nextPageURL);
         /* Building and collecting 'eventObject's from 'rawElements'.*/
                 EventObject event = null;
                 Element htmlNode = null;
@@ -271,6 +290,8 @@ public class MapsActivity extends FragmentActivity
             } catch (IOException e) {
                 e.printStackTrace();
                 taskFailure = true;
+            } catch (InterruptedException e) {
+                e.printStackTrace();
             }
             return "";
         }
@@ -390,12 +411,40 @@ public class MapsActivity extends FragmentActivity
                     }
                 });
         this.map.getUiSettings().setMapToolbarEnabled(false);
+        this.map.setOnPolylineClickListener(new GoogleMap.OnPolylineClickListener() {
+            @Override
+            public void onPolylineClick(Polyline polyline) {
+                /*
+                // case: switching between 2 polylines.
+                if((pressedPolyline != null) && (polyline.equals(pressedPolyline))) {
+                    pressedPolyline.setZIndex(DEFAULT_POLYLINE_Z_INDEX);
+                    pressedPolyline.setWidth(DEFAULT_POLYLINE_WIDTH);
+                    pressedPolyline = polyline;
+                    pressedPolyline.setZIndex(PRESSED_POLYLINE_Z_INDEX);
+                    pressedPolyline.setWidth(PRESSED_POLYLINE_WIDTH);
+
+                } else {
+                    // case: pressing the same polyline.
+                    if(pressedPolyline != null) {
+                        polyline.setZIndex(DEFAULT_POLYLINE_Z_INDEX);
+                        polyline.setWidth(DEFAULT_POLYLINE_WIDTH);
+                        Log.d("china","same poly");
+                    } else { // case: pressing the very first polyline.
+                        pressedPolyline = polyline;
+                        pressedPolyline.setZIndex(PRESSED_POLYLINE_Z_INDEX);
+                        pressedPolyline.setWidth(PRESSED_POLYLINE_WIDTH);
+                    }
+                }
+                */
+            }
+        });
+
         startConnectionTaskSafely(0, FIRST_TASK);
     }
 
     /* Displays the collected data on the map. Empties 'displayEvents' in
     * pre-defined chunks unless specified in the 2nd argument. */
-    public void displayMarkers(boolean emptyArrayFlag) {
+    public void displayMarkers(boolean forceEmptyArrayFlag) {
         EventObject event = null;
         PolylineOptions lineOptions = null;
         Polyline line = null;
@@ -405,7 +454,7 @@ public class MapsActivity extends FragmentActivity
         double lat, lng;
 
         Random randomNumGenerator = new Random();
-        if(emptyArrayFlag) {
+        if(forceEmptyArrayFlag) {
             displayLimit = displayEvents.size();
         } else {
             displayLimit = displayChunkUnit;
@@ -416,7 +465,7 @@ public class MapsActivity extends FragmentActivity
     /* Each 'remove(0)' shifts the array left. Costly operation but
      * necessary for thread-safeness. (always adding at the end,
        always removing from the beginning) */
-            event = displayEvents.remove(0);
+            event = displayEvents.poll();
             color = randomNumGenerator.nextFloat()*360;
             rotationRand = randomNumGenerator.nextFloat()*90 - 90/2;
             redVal = randomNumGenerator.nextInt(255);
@@ -424,12 +473,12 @@ public class MapsActivity extends FragmentActivity
             blueVal = randomNumGenerator.nextInt(255);
             Color.RGBToHSV(redVal, greenVal, blueVal, hsv);
             color = hsv[0];
-            lineOptions = new PolylineOptions().width(15).geodesic(false)
+            lineOptions = new PolylineOptions().width(DEFAULT_POLYLINE_WIDTH).geodesic(true)
                     .color(Color.argb(255, redVal, greenVal, blueVal));
             counter = 0;
             for(int j = 0; j < event.locations.size(); j++) {
-                lat = event.latitudes[j];
-                lng = event.longitudes[j];
+                lat = event.coordinates[j].latitude;
+                lng = event.coordinates[j].longitude;
                 if(lat == -1 || lng == -1) {
                     continue;
                 }
@@ -446,7 +495,8 @@ public class MapsActivity extends FragmentActivity
             }
             if(counter > 1) {
                 line = map.addPolyline(lineOptions);
-
+                line.setClickable(true);
+                line.setWidth(DEFAULT_POLYLINE_WIDTH);
             }
         }
     }
@@ -479,13 +529,22 @@ public class MapsActivity extends FragmentActivity
             printToast("No More Current Events", CONNETION_TYPE);
             return;
         }
+        safeConnectURLIndex = URLIndex;
+        safeConnectChainedCallFlag = chainedCallFlag;
         toggleDiscoveryButton(TOGGLE_OFF);
         toggleSearchButton(TOGGLE_OFF);
         if(chainedCallFlag) {
             printToast("Discovering More Events", CONNETION_TYPE);
         }
-        activeConnectionTask = new ConnectAndDisplayTask(URLIndex, chainedCallFlag);
-        startMyTask(activeConnectionTask);
+
+        Handler handler = new Handler();
+        Runnable runnable = new Runnable() {
+            public void run() {
+                activeConnectionTask = new ConnectAndDisplayTask(safeConnectURLIndex, safeConnectChainedCallFlag);
+                startMyTask(activeConnectionTask);
+            }
+        };
+        handler.postDelayed(runnable, MINIMUM_TIME_BETWEEN_REDDIT_REQUESTS);
     }
 
     /* Initializes the location hashtables.
@@ -587,14 +646,14 @@ public class MapsActivity extends FragmentActivity
                     continue;
                 }
                 if(location.equals("unknown")) {
-                    event.latitudes[counter] = -1;
-                    event.longitudes[counter] = -1;
+                    LatLng unknownCoordinates = new LatLng(-1, -1);
+                    event.coordinates[counter] = unknownCoordinates;
                     break;
                 }
                 List<Address> results = geocoder.getFromLocationName(location, 1);
                 if(!results.isEmpty()) {
-                    event.latitudes[counter] = results.get(0).getLatitude();
-                    event.longitudes[counter] = results.get(0).getLongitude();
+                    LatLng newCoordinates = new LatLng(results.get(0).getLatitude(), results.get(0).getLongitude());
+                    event.coordinates[counter] = newCoordinates;
                     counter++;
                 }
             }
