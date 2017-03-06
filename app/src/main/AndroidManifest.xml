@@ -25,10 +25,10 @@
             </intent-filter>
         </activity>
         <activity
-            android:name="com.khaledf.newsmap.MapsActivity"
+            android:name="com.khaledf.newsmap.MapActivity"
             android:configChanges="orientation|screenSize">
         </activity>
-        <receiver android:name="com.khaledf.newsmap.MapsActivity$NetworkChangeReceiver" >
+        <receiver android:name="com.khaledf.newsmap.MapActivity$NetworkChangeReceiver" >
             <intent-filter>
                 <action android:name="android.net.wifi.WIFI_STATE_CHANGED" />
             </intent-filter>
