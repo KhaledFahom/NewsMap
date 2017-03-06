@@ -36,7 +36,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.support.v4.app.FragmentActivity;
-import android.util.Log;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
@@ -66,86 +65,89 @@ public class MapsActivity extends FragmentActivity
     private boolean safeConnectChainedCallFlag;
 
     /*  We have to wait 2000ms between subsequent connections
-    *   to Reddit, otherwise the app gets severely rate-limited. */
+     *   to Reddit, otherwise the app gets severely rate-limited. */
     private int DEFAULT_POLYLINE_WIDTH = 10, MINIMUM_TIME_BETWEEN_REDDIT_REQUESTS = 2000;
 
-    /*  Required to keep track of the currently pressed polyline.
-    *   Default Zindex is 0, and higher values trump lower ones. */
-    private float maxZIndex = 1;
-    private Polyline pressedPolyline = null;
-
     /*  Required to retry connecting to the current URL
-        in case of connectivity loss. */
+     *  in case of connectivity loss. */
     private String lastUsedURL = "";
 
-    /* Adapter for marker popups. */
-    private PopupAdapter popupAdapter;
+    /* Adapter for clickable marker popups. */
+    private PopupAdapter popupAdapter = null;
 
     /* A list of all possible connection URLs for fetching articles.
-    * Add more in 'initializeConnectionURLs()' function should you like it.
-    * First run, multiple 'ConnectAndDisplayTask' are run in sequence on
-    * all URLs in 'connectionURLs' list, and then every time more events
-    * are requested, the sequential run begins on all the URLs in
-    * 'nextConnectionURLs' list. */
+     * Add more in 'initializeConnectionURLs()' function should you like it.
+     * On first run, multiple 'ConnectAndDisplayTask' objects are run in
+     * sequence on all URLs in 'connectionURLs' list.
+     * If more events are requested, the same sequential run is called on
+     * all the URLs in 'nextConnectionURLs' list. */
     private ArrayList<String> connectionURLs = null;
     private ArrayList<String> nextConnectionURLs = null;
 
     /* Hashtables for determining locations. One contains countries,
-    * the other contains (major) cities. */
+     * the other contains (major) cities. Values are taken from 2 CSV
+     * asset files and inserted at initialization. Given a single word,
+     * we'll use it as a key determine if it relates to an actual location. */
     Hashtable<String, String> countryTable = null;
     Hashtable<String, String> cityTable = null;
 
     /* Current fetched HTML document. Begins as the front page of
-    * the subreddit, and as more get-requests are made, it moves
-    * on to the Next page and so on. */
+     * the subreddit, and as more article requests are made, it moves
+     * on to the Next page and so on. */
     private Document doc = null;
 
-    /* Sync booleans, needed to restrict button presses while doing
-    * network tasks. At first, headline search and event discovery
-    * are disabled until the (initial) discovery task is finished. */
+    /* UI sync booleans, needed to restrict button presses while doing
+     * network tasks. At first, Headline Search and Event Discovery
+     * are disabled until the (initial) discovery task is finished. */
     private boolean searchEnabled = false, discoveryEnabled = false;
+
+    /* Flag booleans used as arguments to control marker display events,
+     * flag connection tasks as Initial or Chained connections, and specify
+     * the required state of UI buttons. (Toggle on/off) */
     private boolean DISPLAY_IN_CHUNKS = false, DISPLAY_ALL = true,
             FIRST_TASK = false, NON_FIRST_TASK = true,
             TOGGLE_OFF = false, TOGGLE_ON = true;
 
     /* Async task that gets the HTML page, extracts headlines,
-    * URLs and locations, then displays them on the map. */
+     * URLs and locations, then displays them on the map. */
     private ConnectAndDisplayTask activeConnectionTask = null;
 
-    /* 2 lists of events:
-    *  - 'events' is used to store event objects retrieved
-    * 	  in background thread.
-    *  - 'displayEvents' is used as a queue for displaying events on the
-    *    UI thread while the background thread still hasn't finished
-    *    retrieving all the coordinates. BackgroundThread adds to the end,
-    *    and UI thread removes from the front. Therefore we'll use LinkedList
+    /* Two lists of events that make up the network & UI pipeline:
+     *  - 'events' is used to store event objects retrieved
+     * 	  from the network in background thread.
+     *  - 'displayEvents' is used as a queue for displaying events on the
+     *    UI thread while the background thread is still calculating
+     *    coordinates for other events. BackgroundThread adds to the end,
+     *    and UI thread removes from the front. Therefore we'll use LinkedList
      *    which has O(1) for add, peek and poll. */
     private ArrayList<EventObject> events = null;
     private LinkedList<EventObject> displayEvents = null;
 
-    /* Map object, used to synchronize with Google Maps API connection. */
+    /* Map object, used to synchronize with Google Maps API connection and
+     * display their glorious map. */
     private GoogleMap map = null;
 
     /* Map display enum. */
     private final int STREET_MAP_TYPE = 0, SATELLITE_MAP_TYPE = 1,
-            TERRAIN_MAP_TYPE = 2, HYBRID_MAP_TYPE = 3, MAP_TYPES_NUM = 4,
-            CONNETION_TYPE = 0, MAP_TYPE = 1;
+            TERRAIN_MAP_TYPE = 2, HYBRID_MAP_TYPE = 3, MAP_TYPES_COUNT = 4,
+            CONNETION_TOAST_TYPE = 0, MAP_TOAST_TYPE = 1, ERROR_TOAST_TYPE = 2;
     private int mapDisplayType;
 
+
     /* Used to store markers after displaying them.
-    * Required for the OnClick event. (to display URL and such) */
+     * Required for the OnClick event. (to display URL and such) */
     public ArrayList<Marker> markers = null;
 
     /* 'bodySizeByes', 'timeoutMS': for the HTTP request, set as infinite.
-    * 'maxCoordinates': the maximum number of events to display on map.
-    * 'redditDisplayChunkLimit': Reddit's default displayed entries per page.
-    * 'displayChunkUnit': NewsMap's display size for mid-connection marking. */
+     * 'maxCoordinates': the maximum number of events to display on map.
+     * 'redditDisplayChunkLimit': Reddit's default displayed entries per page.
+     * 'displayChunkUnit': NewsMap's display size for mid-connection marking. */
     private int bodySizeBytes = 0, timeoutMS = 0, maxCoordinates = 100,
             redditDisplayChunkLimit = 25, displayChunkUnit = 10,
             maximumMarkersOnMap = 1000;
 
     /* An object that represents one recent news event. It could have
-    * multiple locations involved, and thus multiple coordinates. */
+     * multiple locations involved, and thus multiple coordinates. */
     public class EventObject {
         public LatLng[] coordinates;
         public ArrayList<String> locations = null;
@@ -177,7 +179,7 @@ public class MapsActivity extends FragmentActivity
     }
 
     /* Used for popup windows to display a custom popup
-    * after clicking a marker. */
+     * after clicking a marker. */
     private class PopupAdapter implements InfoWindowAdapter {
         LayoutInflater inflater = null;
 
@@ -203,8 +205,8 @@ public class MapsActivity extends FragmentActivity
     }
 
     /* Connects to the website and collects hot events, then
-    fills  the 'events' array with all the informtaion,
-    including coordinates.  */
+     * fills  the 'events' array with all the informtaion,
+     * including coordinates.  */
     private class ConnectAndDisplayTask extends AsyncTask<String,Void,String> {
         /* Each task has to connect to a single URL, specified by
          * the 'URLIndex' which accesses 'MapActivity:connectionURLs' list,
@@ -234,10 +236,6 @@ public class MapsActivity extends FragmentActivity
                 mainURL = connectionURLs.get(URLIndex);
             }
             lastUsedURL = mainURL;
-   //         Log.d("URL1", "MAINURL IS "+mainURL);
-   //         if(markers != null) {
-   //             Log.d("URL","marker size is "+markers.size());
-   //         }
         }
 
         @Override
@@ -249,37 +247,25 @@ public class MapsActivity extends FragmentActivity
             int pendingGetRequests = (int) Math.ceil(maxCoordinates/redditDisplayChunkLimit);
             try {
         /* Connecting and filling 'rawElements' with HTML elements. */
-                doc =  Jsoup.connect(mainURL).userAgent(App.USER_AGENT)
+                doc =  Jsoup.connect(mainURL).userAgent("Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.36")
                         .maxBodySize(bodySizeBytes).timeout(timeoutMS).get();
-                Elements rawElements = doc.select("div[data-type$=link]");
+                Elements rawElements = doc.select("a[data-event-action$=title]");
                 nextPageURL = getNextPageURL(doc.select("a:contains(next)"));
-                while(pendingGetRequests > 0) {
-                    Thread.sleep(MINIMUM_TIME_BETWEEN_REDDIT_REQUESTS);
-                    doc = Jsoup.connect(nextPageURL).maxBodySize(bodySizeBytes)
-                            .timeout(timeoutMS).get();
-                    rawElements.addAll(doc.select("div[data-type$=link]"));
-                    nextPageURL = getNextPageURL(doc.select("a:contains(next)"));
-                    pendingGetRequests--;
-                }
                 nextConnectionURLs.add(nextPageURL);
-    //          Log.d("URL", "nextpg url is: "+nextPageURL);
         /* Building and collecting 'eventObject's from 'rawElements'.*/
-                EventObject event = null;
-                Element htmlNode = null;
-                for(int j = 0; j < rawElements.size(); j++) {
-                    htmlNode = rawElements.get(j).getElementsByClass("title").get(1);
+                for(Element htmlNode : rawElements) {
                     URL = htmlNode.attr("href");
                     headline = htmlNode.text();
                     events.add(new EventObject(headline, URL));
-                    if(j+1 == maxCoordinates) break;
+                    if(events.size() == maxCoordinates) {
+                        break;
+                    }
                 }
-
         /* Analyzing the events and filling in the coordinates. */
-                for(int j = 0; j < events.size(); j++) {
-                    event = events.get(j);
+                for(EventObject event : events) {
                     event.locations = getLocationsFromHeadline(event.headline);
-                    findLngLat(j);
-                    displayEvents.add(events.get(j));
+                    findLngLat(event);
+                    displayEvents.add(event);
                     if(displayEvents.size() >= displayChunkUnit) {
                         publishProgress();
                     }
@@ -290,8 +276,6 @@ public class MapsActivity extends FragmentActivity
             } catch (IOException e) {
                 e.printStackTrace();
                 taskFailure = true;
-            } catch (InterruptedException e) {
-                e.printStackTrace();
             }
             return "";
         }
@@ -305,9 +289,8 @@ public class MapsActivity extends FragmentActivity
             activeConnectionTask = null;
             events = null;
             displayEvents = null;
-
             if(taskFailure) {
-                printToast("That Will Be All For Today.", CONNETION_TYPE);
+                printToast("Connection error, try again later.", ERROR_TOAST_TYPE);
                 toggleDiscoveryButton(TOGGLE_ON);
                 toggleSearchButton(TOGGLE_ON);
                 return;
@@ -318,7 +301,7 @@ public class MapsActivity extends FragmentActivity
             if((URLIndex+1) < connectionURLs.size()) {
                 startConnectionTaskSafely(URLIndex+1, NON_FIRST_TASK);
             } else {
-                printToast("Discovery Completed", CONNETION_TYPE);
+                printToast("Discovery Completed", CONNETION_TOAST_TYPE);
                 toggleDiscoveryButton(TOGGLE_ON);
                 toggleSearchButton(TOGGLE_ON);
             }
@@ -338,9 +321,10 @@ public class MapsActivity extends FragmentActivity
         /* Receives a list of elements and finds the one linking
          * to the next page, as per Reddit HTML attributes. */
         private String getNextPageURL(Elements elems) {
-            for(int i = 0; i < elems.size(); i++){
-                if(elems.get(i).attr("rel").contains("nofollow"))
-                    return elems.get(i).attr("href");
+            for(Element element : elems) {
+                if(element.attr("rel").contains("nofollow")) {
+                    return element.attr("href");
+                }
             }
             return "";
         }
@@ -395,7 +379,7 @@ public class MapsActivity extends FragmentActivity
     }
 
     /* When the map is ready, sets an event listener for popup window events
-    * and starts the connection task. */
+     * and starts the connection task. */
     @Override
     public void onMapReady(GoogleMap map) {
         this.map = map;
@@ -414,59 +398,40 @@ public class MapsActivity extends FragmentActivity
         this.map.setOnPolylineClickListener(new GoogleMap.OnPolylineClickListener() {
             @Override
             public void onPolylineClick(Polyline polyline) {
-                /*
-                // case: switching between 2 polylines.
-                if((pressedPolyline != null) && (polyline.equals(pressedPolyline))) {
-                    pressedPolyline.setZIndex(DEFAULT_POLYLINE_Z_INDEX);
-                    pressedPolyline.setWidth(DEFAULT_POLYLINE_WIDTH);
-                    pressedPolyline = polyline;
-                    pressedPolyline.setZIndex(PRESSED_POLYLINE_Z_INDEX);
-                    pressedPolyline.setWidth(PRESSED_POLYLINE_WIDTH);
-
-                } else {
-                    // case: pressing the same polyline.
-                    if(pressedPolyline != null) {
-                        polyline.setZIndex(DEFAULT_POLYLINE_Z_INDEX);
-                        polyline.setWidth(DEFAULT_POLYLINE_WIDTH);
-                        Log.d("china","same poly");
-                    } else { // case: pressing the very first polyline.
-                        pressedPolyline = polyline;
-                        pressedPolyline.setZIndex(PRESSED_POLYLINE_Z_INDEX);
-                        pressedPolyline.setWidth(PRESSED_POLYLINE_WIDTH);
-                    }
-                }
-                */
+                //TODO: do something when polylines are pressed.
             }
         });
-
         startConnectionTaskSafely(0, FIRST_TASK);
     }
 
     /* Displays the collected data on the map. Empties 'displayEvents' in
-    * pre-defined chunks unless specified in the 2nd argument. */
+     * pre-defined chunks unless specified in the 2nd argument. */
     public void displayMarkers(boolean forceEmptyArrayFlag) {
         EventObject event = null;
         PolylineOptions lineOptions = null;
         Polyline line = null;
         Marker newMarker = null;
-        int displayLimit, counter, redVal, greenVal, blueVal;
+        int displayLimit, locationCount, redVal, greenVal, blueVal;
         float color, rotationRand;
         double lat, lng;
 
         Random randomNumGenerator = new Random();
-        if(forceEmptyArrayFlag) {
+        if(forceEmptyArrayFlag == DISPLAY_ALL) {
             displayLimit = displayEvents.size();
-        } else {
+        } else {    // forceEmptyArrayFlag==DISPLAY_IN_CHUNKS
             displayLimit = displayChunkUnit;
         }
         float[] hsv = new float[3];
         for(int i = 0; (i < displayLimit) &&
                 (i < displayEvents.size()); i++) {
     /* Each 'remove(0)' shifts the array left. Costly operation but
-     * necessary for thread-safeness. (always adding at the end,
-       always removing from the beginning) */
+     * necessary for thread-safeness. (adding at the end,
+       removing from the beginning)*/ //TODO: this has to become a Queue asap
             event = displayEvents.poll();
-            color = randomNumGenerator.nextFloat()*360;
+            if((event == null) || (event.coordinates == null)){
+                continue;
+            }
+            //color = randomNumGenerator.nextFloat()*360;
             rotationRand = randomNumGenerator.nextFloat()*90 - 90/2;
             redVal = randomNumGenerator.nextInt(255);
             greenVal = randomNumGenerator.nextInt(255);
@@ -475,15 +440,18 @@ public class MapsActivity extends FragmentActivity
             color = hsv[0];
             lineOptions = new PolylineOptions().width(DEFAULT_POLYLINE_WIDTH).geodesic(true)
                     .color(Color.argb(255, redVal, greenVal, blueVal));
-            counter = 0;
-            for(int j = 0; j < event.locations.size(); j++) {
-                lat = event.coordinates[j].latitude;
-                lng = event.coordinates[j].longitude;
-                if(lat == -1 || lng == -1) {
+            locationCount = 0;
+            for(LatLng coordinate : event.coordinates) {
+                if(coordinate == null) {
+                    continue;
+                }
+                lat = coordinate.latitude;
+                lng = coordinate.longitude;
+                if (lat == -1 || lng == -1) {
                     continue;
                 }
                 lineOptions.add(new LatLng(lat, lng));
-                counter++;
+                locationCount++;
                 newMarker = map.addMarker(new MarkerOptions()
                         .snippet(event.URL)
                         .position(new LatLng(lat, lng))
@@ -493,7 +461,7 @@ public class MapsActivity extends FragmentActivity
                         defaultMarker(color));
                 markers.add(newMarker);
             }
-            if(counter > 1) {
+            if(locationCount > 1) {
                 line = map.addPolyline(lineOptions);
                 line.setClickable(true);
                 line.setWidth(DEFAULT_POLYLINE_WIDTH);
@@ -516,17 +484,18 @@ public class MapsActivity extends FragmentActivity
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
         if(newConfig.orientation == Configuration.ORIENTATION_PORTRAIT) {
+            //..
         } else
         if (newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE){
+            //..
         }
     }
 
-    /* Used on initial data connection and every time the user presses
-    * the volume+ button. */
+    /* Used on initial data connection and every time the user requests more articles. */
     private void startConnectionTaskSafely(int URLIndex, boolean chainedCallFlag) {
         if((activeConnectionTask != null) || (markers != null &&
                                             markers.size() > maximumMarkersOnMap)){
-            printToast("No More Current Events", CONNETION_TYPE);
+            printToast("No More Current Events", ERROR_TOAST_TYPE);
             return;
         }
         safeConnectURLIndex = URLIndex;
@@ -534,13 +503,14 @@ public class MapsActivity extends FragmentActivity
         toggleDiscoveryButton(TOGGLE_OFF);
         toggleSearchButton(TOGGLE_OFF);
         if(chainedCallFlag) {
-            printToast("Discovering More Events", CONNETION_TYPE);
+            printToast("Discovering More Events", CONNETION_TOAST_TYPE);
         }
 
         Handler handler = new Handler();
         Runnable runnable = new Runnable() {
             public void run() {
-                activeConnectionTask = new ConnectAndDisplayTask(safeConnectURLIndex, safeConnectChainedCallFlag);
+                activeConnectionTask = new ConnectAndDisplayTask(safeConnectURLIndex,
+                                                            safeConnectChainedCallFlag);
                 startMyTask(activeConnectionTask);
             }
         };
@@ -548,7 +518,7 @@ public class MapsActivity extends FragmentActivity
     }
 
     /* Initializes the location hashtables.
-    * Code duplication warning. */
+     * Code duplication warning. */
     private void initializeHashTables() {
         countryTable = new Hashtable<String, String>();
         cityTable = new Hashtable<String, String>();
@@ -613,35 +583,32 @@ public class MapsActivity extends FragmentActivity
     /* Cycles through the 4 possible map display types. */
     private void cycleMapType() {
         mapDisplayType++;
-        mapDisplayType = mapDisplayType % MAP_TYPES_NUM;
+        mapDisplayType = mapDisplayType % MAP_TYPES_COUNT;
         switch(mapDisplayType) {
             case HYBRID_MAP_TYPE:
-                printToast("Hybrid Map", MAP_TYPE);
+                printToast("Hybrid Map", MAP_TOAST_TYPE);
                 break;
             case TERRAIN_MAP_TYPE:
-                printToast("Terrain Map", MAP_TYPE);
+                printToast("Terrain Map", MAP_TOAST_TYPE);
                 break;
             case SATELLITE_MAP_TYPE:
-                printToast("Satellite Map", MAP_TYPE);
+                printToast("Satellite Map", MAP_TOAST_TYPE);
                 break;
             case STREET_MAP_TYPE:
-                printToast("Street Map", MAP_TYPE);
+                printToast("Street Map", MAP_TOAST_TYPE);
                 break;
         }
         map.setMapType(mapDisplayType+1); //values: {1,2,3,4}, offset by 1
     }
 
     /* Finds the event in 'events' by index and makes an API call to get
-    * coordinates from location names in the event, and fills the
-    * location data in the event object. */
-    private void findLngLat(int index) {
+     * coordinates from location names in the event, and fills the
+     * location data in the event object. */
+    private void findLngLat(EventObject event) {
         Geocoder geocoder = new Geocoder(getApplicationContext());
-        EventObject event = events.get(index);
         int counter = 0;
-        String location = null;
         try {
-            for(int i = 0; i < event.locations.size(); i++) {
-                location = event.locations.get(i);
+            for(String location : event.locations) {
                 if(location == null) {
                     continue;
                 }
@@ -666,16 +633,15 @@ public class MapsActivity extends FragmentActivity
     private ArrayList<String> getLocationsFromHeadline(String headline) {
         ArrayList<String> keywords = new ArrayList<String>();
         ArrayList<String> locations = new ArrayList<String>();
-        StringTokenizer tokens = new StringTokenizer(headline);
+        StringTokenizer headlineTokens = new StringTokenizer(headline);
         String token = "", location = "";
         Set<String> newSet = new HashSet<String>();
 
-/* Tokenizing the headline and trimming each token's beginning and end
- * in case of quotes. All tokens not beginning with capital letters
- * are discarded.
- */
-        for(int i = 0; i < tokens.countTokens(); i++) {
-            token = (String)tokens.nextElement();
+    /* Tokenizing the headline and trimming each token's beginning and end
+     * in case of quotes. All tokens not beginning with capital letters
+     * are ignored. */
+        for(int i = 0; i < headlineTokens.countTokens(); i++) {
+            token = (String)headlineTokens.nextElement();
             if(token.charAt(0) == '\"' || token.charAt(0) == '\'')
                 token = token.substring(1);
             if(token.charAt(token.length()-1) == '\'' ||
@@ -686,21 +652,20 @@ public class MapsActivity extends FragmentActivity
             }
         }
 
-/* In case no tokens are usable, we return "unknown" as a location. */
+    /* In case no tokens are usable, we return "unknown" as a location. */
         if(keywords.isEmpty()) {
             locations.add("unknown");
             return locations;
         }
 
-/* For each token, we'll look in the hashtables and
- * try to match a location. */
-        for(int i = 0; i < keywords.size(); i++) {
-            token = keywords.get(i);
-            if(token.equals("The") || token.equals("the") || token.equals("THE"))
+    /* For each token, we'll look in the hashtables and
+     * try to match a location. */
+        for(String keyword : keywords) {
+            if(keyword.equals("The") || keyword.equals("the") || keyword.equals("THE"))
                 continue;
-            location = cityTable.get(token);
+            location = cityTable.get(keyword);
             if(location == null) {
-                location = countryTable.get(token);
+                location = countryTable.get(keyword);
                 if(location == null) {
                     continue;
                 } else {
@@ -720,23 +685,23 @@ public class MapsActivity extends FragmentActivity
         return locations;
     }
 
-    public void toggleSearchButton(boolean flag) {
+    public void toggleSearchButton(boolean function) {
         ImageButton button = (ImageButton)findViewById(R.id.search_button);
-        if(flag == true) {
+        if(function == TOGGLE_ON) {
             button.getBackground().setAlpha(255);
             searchEnabled = true;
-        } else {
+        } else {    // function == TOGGLE_OFF
             button.getBackground().setAlpha(64);
             searchEnabled = false;
         }
     }
 
-    public void toggleDiscoveryButton(boolean flag) {
+    public void toggleDiscoveryButton(boolean function) {
         ImageButton button = (ImageButton)findViewById(R.id.discover_button);
-        if(flag == true) {
+        if(function == TOGGLE_ON) {
             button.getBackground().setAlpha(255);
             discoveryEnabled = true;
-        } else {
+        } else {    // function == TOGGLE_OFF
             button.getBackground().setAlpha(64);
             discoveryEnabled = false;
         }
@@ -753,21 +718,31 @@ public class MapsActivity extends FragmentActivity
         return 0xff000000 | (r << 16) | (g << 8) | b;
     }
 
-    /* Prints a toast message. */
+    /* Prints a toast message. Network messages are blue while
+     * map messages are orange. */
     private void printToast(String msg, int type) {
-        int MY_DURATION = 500, MY_Y_OFFSET = 350;
+        int toastDuration = 500, toastVerticalOffset = 350;
         SuperToast toast = null;
-        if(msg.equals("That Will Be All For Today.")) {
-            MY_DURATION *=3;
+        if(type == ERROR_TOAST_TYPE) {
+            toastDuration *=3;
         }
-        if(type == CONNETION_TYPE) {
-            toast = SuperToast.create(this, msg, MY_DURATION,
-                    Style.getStyle(Style.BLUE, SuperToast.Animations.FADE));
-        } else if(type == MAP_TYPE) {
-            toast = SuperToast.create(this, msg, MY_DURATION,
-                    Style.getStyle(Style.ORANGE, SuperToast.Animations.FADE));
+        Style toastStyle = null;
+        switch(type) {
+            case CONNETION_TOAST_TYPE:
+                toastStyle = Style.getStyle(Style.BLUE, SuperToast.Animations.FADE);
+                break;
+            case MAP_TOAST_TYPE:
+                toastStyle = Style.getStyle(Style.ORANGE, SuperToast.Animations.FADE);
+                break;
+            case ERROR_TOAST_TYPE:
+                toastStyle = Style.getStyle(Style.RED, SuperToast.Animations.FADE);
+                break;
+            default:
+                toastStyle = Style.getStyle(Style.GRAY, SuperToast.Animations.FADE);
+                break;
         }
-        toast.setGravity(Gravity.BOTTOM, 0, MY_Y_OFFSET);
+        toast = SuperToast.create(this, msg, toastDuration, toastStyle);
+        toast.setGravity(Gravity.BOTTOM, 0, toastVerticalOffset);
         toast.show();
     }
 
